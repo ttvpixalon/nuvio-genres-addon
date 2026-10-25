@@ -39,6 +39,7 @@ jobs:
         run: |
           python build.py
           cp logo.png dist/logo.png
+          cp -r covers dist/covers
 
       - uses: actions/configure-pages@v5
         with:

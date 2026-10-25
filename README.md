@@ -78,3 +78,10 @@ Downloads IMDb's `title.basics` and `title.ratings` datasets into `work/` (≈24
 
 Information courtesy of IMDb (https://www.imdb.com). Used with permission. · This product uses the TMDB API but
 is not endorsed or certified by TMDB. · Artwork via TMDB and metahub (Stremio).
+
+## Theme covers
+
+`covers/themes/` holds the landscape tiles for the Themes collection, served at `covers/themes/<key>.webp` with a
+clean `<key>.hero.webp` backdrop and a `<key>.logo.png` title for the folder hero. They are built from real film
+stills (metahub backdrops) in the style of Xperience's "kaptain" pack by `covers/make_theme_covers.py`, for personal
+use in your own Nuvio.
