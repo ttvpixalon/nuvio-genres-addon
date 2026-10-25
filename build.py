@@ -8,11 +8,13 @@ counts) as a daily dataset. This build uses IMDb as the single source of truth f
 and uses TMDB only to know *what is popular / new right now* and for artwork:
 
   Top Rated <genre> Movies / Series   IMDb rating, with a vote floor so only widely-seen titles qualify.
+  <genre> Essentials                  the genre's canon: the titles the most people have seen (IMDb vote count),
+                                      any era, rating >= 6.0 — the staples a strict Top Rated row leaves out.
   Popular <genre> Movies / Series     TMDB "popular right now" pools, kept to titles whose IMDb genres include
                                       the genre.
   New <genre> Movies / Series         TMDB newest releases that people have already rated, same IMDb check.
 
-Thirteen genres x six rows = 78 catalogs, served as /catalog/{type}/{row}/genre={Genre}.json so Nuvio's
+Thirteen genres x eight rows = 104 catalogs, served as /catalog/{type}/{row}/genre={Genre}.json so Nuvio's
 collections can point at them (the catalogs are hidden from the Home page: showInHome=false and a required
 genre extra). Rebuilt daily.
 
@@ -110,7 +112,8 @@ GENRES = [
          t=[dict(with_keywords=THRILLER_TV_KW), dict(with_genres=ids(T["crime"], T["mystery"]))],
          floors=(40000, 10000)),
 ]
-ROWS = [("popular", "Popular"), ("top-rated", "Top Rated"), ("new", "New")]
+ROWS = [("popular", "Popular"), ("top-rated", "Top Rated"), ("new", "New"), ("essentials", "Essentials")]
+ESSENTIALS_MIN_RATING = 6.0
 POPULAR_MIN_IMDB_VOTES = {"movie": 200, "series": 100}
 NEW_MIN_IMDB_VOTES = {"movie": 200, "series": 100}       # "new" also means noticed: a few hundred IMDb voters
 NEW_MAX_AGE_DAYS = 540
@@ -403,6 +406,28 @@ def row_top_rated(kind: str, g: dict, imdb: dict[str, dict]) -> list[dict]:
     return out
 
 
+def row_essentials(kind: str, g: dict, imdb: dict[str, dict]) -> list[dict]:
+    """The genre's canon: the titles the most people have seen (IMDb vote count), any era, rating >= 6.0.
+    Catches the staples a strict Top Rated row leaves out (Scream, Saw, Blair Witch, Insidious ...)."""
+    floor = g["floors"][0 if kind == "movie" else 1]
+    cands = [(t, r) for t, r in imdb.items()
+             if r["votes"] >= floor and r["rating"] >= ESSENTIALS_MIN_RATING and belongs(r, g, kind)]
+    cands.sort(key=lambda x: (-x[1]["votes"], -x[1]["rating"]))
+    cands = cands[: int(ROW_SIZE * (2.5 if g.get("lang") else 1.5))]
+    if TMDB_KEY:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(lambda tr: find_details(kind, tr[0]), [c for c in cands if c[0] not in CACHE["find"]]))
+    out = []
+    for t, r in cands:
+        if len(out) >= ROW_SIZE:
+            break
+        d = find_details(kind, t)
+        if not lang_ok(g, r, d["lang"]):
+            continue
+        out.append(meta_for(kind, t, r, d))
+    return out
+
+
 def row_from_pool(kind: str, g: dict, imdb: dict[str, dict], pool: list[dict], mode: str) -> list[dict]:
     floor = (POPULAR_MIN_IMDB_VOTES if mode == "popular" else NEW_MIN_IMDB_VOTES)[kind]
     keep = []
@@ -449,6 +474,8 @@ def main() -> int:
             for row_id, label in ROWS:
                 if row_id == "top-rated":
                     metas = row_top_rated(kind, g, imdb)
+                elif row_id == "essentials":
+                    metas = row_essentials(kind, g, imdb)
                 elif TMDB_KEY:
                     metas = row_from_pool(kind, g, imdb, pools[(kind, row_id)], row_id)
                 else:
@@ -470,7 +497,7 @@ def main() -> int:
         "id": ADDON_ID,
         "version": f"1.{now.strftime('%Y%m%d')}.{now.strftime('%H%M')}",
         "name": "Genres · IMDb-verified",
-        "description": "Popular, Top Rated and New rows for 13 genres, movies and series. Membership comes from "
+        "description": "Popular, Top Rated, New and Essentials rows for 13 genres, movies and series. Membership comes from "
                        "IMDb's genre taxonomy (so Horror / Thriller / Sports series exist), Top Rated from IMDb "
                        "ratings with vote floors, Popular / New from TMDB. Built for Nuvio collections; the rows "
                        "stay off the Home page. Rebuilt daily. Information courtesy of IMDb (https://www.imdb.com). "
@@ -502,7 +529,7 @@ def main() -> int:
         "Genres collection folders at its rows:</p>"
         f"<p><code style='font-size:1.1rem'>{SITE_URL}/manifest.json</code></p>"
         f"<p>Built {now.strftime('%Y-%m-%d %H:%M UTC')} · {len(summary)} rows · "
-        f"catalogs live at <code>catalog/&lt;movie|series&gt;/&lt;popular|top-rated|new&gt;/genre=&lt;Genre&gt;.json</code></p>"
+        f"catalogs live at <code>catalog/&lt;movie|series&gt;/&lt;popular|top-rated|new|essentials&gt;/genre=&lt;Genre&gt;.json</code></p>"
         f"<table style='border-collapse:collapse;font-size:.9rem'>{rows_html}</table>"
         "<p style='color:#888;font-size:.9rem;margin-top:2rem'>Information courtesy of IMDb (https://www.imdb.com). "
         "Used with permission. · This product uses the TMDB API but is not endorsed or certified by TMDB. · "
