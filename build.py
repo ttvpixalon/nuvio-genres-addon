@@ -14,7 +14,7 @@ and uses TMDB only to know *what is popular / new right now* and for artwork:
                                       the genre.
   New <genre> Movies / Series         TMDB newest releases that people have already rated, same IMDb check.
 
-Thirteen genres x eight rows = 104 catalogs, served as /catalog/{type}/{row}/genre={Genre}.json so Nuvio's
+Thirteen genres x eight rows = 104 genre catalogs, plus Top Rated / Essentials for 8 decades and 14 themes, served as /catalog/{type}/{row}/genre={Genre}.json so Nuvio's
 collections can point at them (the catalogs are hidden from the Home page: showInHome=false and a required
 genre extra). Rebuilt daily.
 
@@ -113,6 +113,57 @@ GENRES = [
          floors=(40000, 10000)),
 ]
 ROWS = [("popular", "Popular"), ("top-rated", "Top Rated"), ("new", "New"), ("essentials", "Essentials")]
+
+# By Decade: pure IMDb (startYear). floors = (movie, series) vote floors — older decades have fewer voters.
+DECADES = [
+    dict(key="2020s", years=(2020, 2100), floors=(40000, 20000)),
+    dict(key="2010s", years=(2010, 2019), floors=(40000, 20000)),
+    dict(key="2000s", years=(2000, 2009), floors=(40000, 15000)),
+    dict(key="1990s", years=(1990, 1999), floors=(40000, 10000)),
+    dict(key="1980s", years=(1980, 1989), floors=(25000, 5000)),
+    dict(key="1970s", years=(1970, 1979), floors=(20000, 3000)),
+    dict(key="1960s", years=(1960, 1969), floors=(15000, 2000)),
+    dict(key="1950s-and-before", years=(1800, 1959), floors=(10000, 1000)),
+]
+
+# Themes: candidates come from TMDB keyword discovery (IMDb publishes no keywords), ranking is IMDb's.
+# kw = verified TMDB keyword ids (themoviedb.org/search/keyword); imdb = pure-IMDb rule instead of a TMDB pool.
+KW = {
+    "heist": ids(10051, 191845, 250043, 15363, 9728, 321964, 239663, 40903, 159413, 273612, 156031, 159747, 159859,
+                 6168, 191604, 156236, 192261),
+    "time_travel": ids(4379, 5455, 208757, 186760, 220800, 240807),
+    "superhero": ids(9715, 155030, 180734, 272493, 265979, 158456),
+    "zombies": ids(12377, 186565, 157351, 356202, 360949, 364488, 207891),
+    "apocalypse": ids(12332, 4458, 359337, 384784, 10150, 34161, 677, 10689, 235668, 353811),
+    "serial_killer": ids(10714, 227428, 14676, 12339),
+    "whodunnit": ids(12570, 364800, 207046, 236429, 231596, 366584),
+    "time_loop": ids(10854, 220046, 366519, 364334),
+    "outer_space": ids(252634, 3801, 14626, 252937, 156039, 161176, 1612, 3388, 4040, 191132, 209280, 2902, 3386,
+                       156836, 839, 7422, 12185, 226235, 195788, 260089),
+    "mindfuck": ids(374835, 362567, 174089, 3972, 231173, 234868, 10597, 9887, 161891, 156761, 293381, 186789, 229787),
+    "plot_twist": ids(275311, 373440, 326438, 335567, 331114, 12565, 12570, 364800, 207046, 184312, 381632, 174089),
+    "true_crime": ids(33722, 9672, 307587, 379548, 379549),
+}
+THEMES = [
+    dict(key="Mindfuck", kw=KW["mindfuck"], movie_genres=ids(878, 9648, 53, 18, 27), movies_only=True,
+         floors=(10000, 5000)),
+    dict(key="Plot-Twists", kw=KW["plot_twist"], movie_genres=ids(9648, 53, 80, 27, 18), tv_genres=ids(18, 9648, 80),
+         floors=(10000, 5000)),
+    dict(key="Heist", kw=KW["heist"], floors=(10000, 3000)),
+    dict(key="Time-Travel", kw=KW["time_travel"], floors=(10000, 3000)),
+    dict(key="Superhero", kw=KW["superhero"], floors=(10000, 5000)),
+    dict(key="Zombies", kw=KW["zombies"], floors=(10000, 3000)),
+    dict(key="Apocalypse", kw=KW["apocalypse"], floors=(10000, 3000)),
+    dict(key="Serial-Killer", kw=KW["serial_killer"], floors=(10000, 3000)),
+    dict(key="Whodunnit", kw=KW["whodunnit"], floors=(10000, 3000)),
+    dict(key="Time-Loop", kw=KW["time_loop"], floors=(5000, 2000)),
+    dict(key="Modern-Horror", imdb=dict(genre="Horror", years=(2000, 2100)), floors=(25000, 10000)),
+    dict(key="Horror-Classics", imdb=dict(genre="Horror", years=(1800, 1999)), floors=(15000, 3000)),
+    dict(key="Outer-Space", kw=KW["outer_space"], floors=(10000, 3000)),
+    dict(key="True-Crime", kw=KW["true_crime"], movie_genres=ids(80, 99), tv_genres=ids(80, 99), docs_ok=True,
+         floors=(10000, 3000)),
+]
+EXTRA_ROWS = [("top-rated", "Top Rated"), ("essentials", "Essentials")]
 ESSENTIALS_MIN_RATING = 6.0
 POPULAR_MIN_IMDB_VOTES = {"movie": 200, "series": 100}
 NEW_MIN_IMDB_VOTES = {"movie": 200, "series": 100}       # "new" also means noticed: a few hundred IMDb voters
@@ -375,23 +426,28 @@ def meta_for(kind: str, imdb: str, rec: dict, tm: dict | None) -> dict:
     }
 
 
-def row_top_rated(kind: str, g: dict, imdb: dict[str, dict]) -> list[dict]:
-    """IMDb-rated best of the genre. Sorted by IMDb's own chart formula (a Bayesian estimate that pulls a rating
-    toward the genre average until enough people have voted), so a 9.2 from 45k fan votes doesn't outrank an 8.6
-    from 750k, and with a hard vote floor so only widely-seen titles qualify."""
-    floor = g["floors"][0 if kind == "movie" else 1]
-    cands = [(t, r) for t, r in imdb.items() if r["votes"] >= floor and belongs(r, g, kind)]
-    if not cands:
-        return []
-    c_mean = sum(r["rating"] for _, r in cands) / len(cands)
-    m = floor * 3
+def rank_rows(kind: str, cands: list[tuple[str, dict]], floor: int, group: dict, mode: str) -> list[dict]:
+    """Rank IMDb-backed candidates for one row.
+    top-rated : IMDb's own chart formula — a Bayesian estimate that pulls a rating toward the group average until
+                enough people have voted, so a 9.2 from 45k fan votes doesn't outrank an 8.6 from 750k — with a hard
+                vote floor so only widely-seen titles qualify.
+    essentials: the canon — the titles the most people have seen (IMDb vote count), rating >= 6.0."""
+    cands = [(t, r) for t, r in cands if r["votes"] >= floor]
+    if mode == "essentials":
+        cands = [(t, r) for t, r in cands if r["rating"] >= ESSENTIALS_MIN_RATING]
+        cands.sort(key=lambda x: (-x[1]["votes"], -x[1]["rating"]))
+    else:
+        if not cands:
+            return []
+        c_mean = sum(r["rating"] for _, r in cands) / len(cands)
+        m = floor * 3
 
-    def weighted(r: dict) -> float:
-        v = r["votes"]
-        return (v / (v + m)) * r["rating"] + (m / (v + m)) * c_mean
+        def weighted(r: dict) -> float:
+            v = r["votes"]
+            return (v / (v + m)) * r["rating"] + (m / (v + m)) * c_mean
 
-    cands.sort(key=lambda x: (-weighted(x[1]), -x[1]["votes"]))
-    cands = cands[: int(ROW_SIZE * (2.5 if g.get("lang") else 1.5))]      # the anime split drops some candidates
+        cands.sort(key=lambda x: (-weighted(x[1]), -x[1]["votes"]))
+    cands = cands[: int(ROW_SIZE * (2.5 if group.get("lang") else 1.5))]   # the anime split drops some candidates
     if TMDB_KEY:
         with ThreadPoolExecutor(max_workers=6) as ex:                       # warm the TMDB record cache
             list(ex.map(lambda tr: find_details(kind, tr[0]), [c for c in cands if c[0] not in CACHE["find"]]))
@@ -400,32 +456,20 @@ def row_top_rated(kind: str, g: dict, imdb: dict[str, dict]) -> list[dict]:
         if len(out) >= ROW_SIZE:
             break
         d = find_details(kind, t)
-        if not lang_ok(g, r, d["lang"]):
+        if not lang_ok(group, r, d["lang"]):
             continue
         out.append(meta_for(kind, t, r, d))
     return out
+
+
+def row_top_rated(kind: str, g: dict, imdb: dict[str, dict]) -> list[dict]:
+    floor = g["floors"][0 if kind == "movie" else 1]
+    return rank_rows(kind, [(t, r) for t, r in imdb.items() if belongs(r, g, kind)], floor, g, "top-rated")
 
 
 def row_essentials(kind: str, g: dict, imdb: dict[str, dict]) -> list[dict]:
-    """The genre's canon: the titles the most people have seen (IMDb vote count), any era, rating >= 6.0.
-    Catches the staples a strict Top Rated row leaves out (Scream, Saw, Blair Witch, Insidious ...)."""
     floor = g["floors"][0 if kind == "movie" else 1]
-    cands = [(t, r) for t, r in imdb.items()
-             if r["votes"] >= floor and r["rating"] >= ESSENTIALS_MIN_RATING and belongs(r, g, kind)]
-    cands.sort(key=lambda x: (-x[1]["votes"], -x[1]["rating"]))
-    cands = cands[: int(ROW_SIZE * (2.5 if g.get("lang") else 1.5))]
-    if TMDB_KEY:
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            list(ex.map(lambda tr: find_details(kind, tr[0]), [c for c in cands if c[0] not in CACHE["find"]]))
-    out = []
-    for t, r in cands:
-        if len(out) >= ROW_SIZE:
-            break
-        d = find_details(kind, t)
-        if not lang_ok(g, r, d["lang"]):
-            continue
-        out.append(meta_for(kind, t, r, d))
-    return out
+    return rank_rows(kind, [(t, r) for t, r in imdb.items() if belongs(r, g, kind)], floor, g, "essentials")
 
 
 def row_from_pool(kind: str, g: dict, imdb: dict[str, dict], pool: list[dict], mode: str) -> list[dict]:
@@ -451,6 +495,69 @@ def row_from_pool(kind: str, g: dict, imdb: dict[str, dict], pool: list[dict], m
         if len(out) >= ROW_SIZE:
             break
     return out
+
+
+# ----------------------------------------------------------------------------------------------- decades / themes
+def clean(rec: dict, kind: str, docs_ok: bool = False) -> bool:
+    """The rules every row shares: right type, no nonfiction series, no documentaries (unless allowed)."""
+    if rec["type"] != kind:
+        return False
+    if kind == "series" and NONFICTION_SERIES & set(rec["genres"]):
+        return False
+    if "Documentary" in rec["genres"] and not docs_ok:
+        return False
+    return True
+
+
+def decade_cands(kind: str, dec: dict, imdb: dict[str, dict]) -> list[tuple[str, dict]]:
+    lo, hi = dec["years"]
+    out = []
+    for t, r in imdb.items():
+        if not r["year"].isdigit() or not (lo <= int(r["year"]) <= hi) or not clean(r, kind):
+            continue
+        out.append((t, r))
+    return out
+
+
+_theme_pools: dict[tuple[str, str], list[tuple[str, dict]]] = {}
+
+
+def theme_cands(kind: str, th: dict, imdb: dict[str, dict]) -> list[tuple[str, dict]]:
+    """Candidates for a theme: a pure-IMDb rule when one exists, otherwise TMDB keyword discovery (the most-voted
+    and the most popular matches) joined to their IMDb records."""
+    key = (kind, th["key"])
+    if key in _theme_pools:
+        return _theme_pools[key]
+    docs_ok = th.get("docs_ok", False)
+    if th.get("imdb"):
+        lo, hi = th["imdb"]["years"]
+        cands = [(t, r) for t, r in imdb.items()
+                 if th["imdb"]["genre"] in r["genres"] and r["year"].isdigit() and lo <= int(r["year"]) <= hi
+                 and clean(r, kind, docs_ok)]
+    elif not TMDB_KEY:
+        cands = []
+    else:
+        params = {"with_keywords": th["kw"]}
+        genres = th.get("movie_genres" if kind == "movie" else "tv_genres")
+        if genres:
+            params["with_genres"] = genres
+        raw = {}
+        for sort_by, pages in (("vote_count.desc", 10), ("popularity.desc", 5)):
+            for r in discover(kind, pages, sort_by=sort_by, **params):
+                raw.setdefault(r["id"], r)
+        todo = [(kind, i) for i in raw if f"{'movie' if kind == 'movie' else 'tv'}:{i}" not in CACHE["ext"]]
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(lambda ki: external_imdb(*ki), todo))
+        cands, seen = [], set()
+        for r in raw.values():
+            imdb_id = external_imdb(kind, r["id"])
+            rec = imdb.get(imdb_id)
+            if not imdb_id or imdb_id in seen or not rec or not clean(rec, kind, docs_ok):
+                continue
+            seen.add(imdb_id)
+            cands.append((imdb_id, rec))
+    _theme_pools[key] = cands
+    return cands
 
 
 # ----------------------------------------------------------------------------------------------- build
@@ -485,6 +592,23 @@ def main() -> int:
                 first = ", ".join(m["name"] for m in metas[:3])
                 summary.append((g["key"], kind, label, len(metas), first))
                 print(f"  {label:>9} {g['key']:<9} {kind:<6} {len(metas):>3}  {first}")
+    for family, groups, cand_fn in (("decade", DECADES, decade_cands), ("theme", THEMES, theme_cands)):
+        for kind in ("movie", "series"):
+            for row_id, _label in EXTRA_ROWS:
+                (DIST / "catalog" / kind / f"{family}-{row_id}").mkdir(parents=True, exist_ok=True)
+        for grp in groups:
+            for kind in ("movie", "series"):
+                for row_id, label in EXTRA_ROWS:
+                    path = DIST / "catalog" / kind / f"{family}-{row_id}" / f"genre={grp['key']}.json"
+                    if kind == "series" and grp.get("movies_only"):
+                        path.write_text(json.dumps({"metas": []}), "utf-8")
+                        continue
+                    floor = grp["floors"][0 if kind == "movie" else 1]
+                    metas = rank_rows(kind, cand_fn(kind, grp, imdb), floor, grp, row_id)
+                    path.write_text(json.dumps({"metas": metas}, ensure_ascii=False, indent=1), "utf-8")
+                    first = ", ".join(m["name"] for m in metas[:3])
+                    summary.append((grp["key"], kind, f"{family} {label}", len(metas), first))
+                    print(f"  {family + ' ' + label:>17} {grp['key']:<17} {kind:<6} {len(metas):>3}  {first}")
     thin = [s for s in summary if s[3] < 20]
     if thin:
         print(f"  ! thin rows (<20 items): {[(s[0], s[1], s[2], s[3]) for s in thin]}", file=sys.stderr)
@@ -512,6 +636,14 @@ def main() -> int:
              "extra": [{"name": "genre", "isRequired": True, "options": options}],
              "extraRequired": ["genre"], "extraSupported": ["genre"]}
             for kind in ("movie", "series") for row_id, label in ROWS
+        ] + [
+            {"type": kind, "id": f"{family}-{row_id}",
+             "name": f"{label} {'Movies' if kind == 'movie' else 'Series'} by {family.title()}",
+             "showInHome": False,
+             "extra": [{"name": "genre", "isRequired": True, "options": [g["key"] for g in groups]}],
+             "extraRequired": ["genre"], "extraSupported": ["genre"]}
+            for family, groups in (("decade", DECADES), ("theme", THEMES))
+            for kind in ("movie", "series") for row_id, label in EXTRA_ROWS
         ],
         "behaviorHints": {"configurable": False, "configurationRequired": False},
     }

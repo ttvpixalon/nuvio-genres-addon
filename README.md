@@ -1,7 +1,8 @@
 # Genres · IMDb-verified — Nuvio / Stremio catalog addon
 
-Popular, Top Rated, New and Essentials rows for 13 genres, movies and series — 104 catalogs — built for the **Genres**
-collection in Nuvio. Rebuilt daily by GitHub Actions and served from GitHub Pages; no server.
+Popular, Top Rated, New and Essentials rows for 13 genres, movies and series (104 catalogs), plus Top Rated and
+Essentials rows for 8 decades and 14 themes — built for the **Genres**, **By Decade** and **Themes** collections in
+Nuvio. Rebuilt daily by GitHub Actions and served from GitHub Pages; no server.
 
 ## Why this exists
 
@@ -39,6 +40,20 @@ collection editor the four catalogs show up with a genre picker, so you can also
 
 Genres: Action, Adventure, Animated, Anime, Comedy, Crime, Drama, Fantasy, Horror, Mystery, Sci-Fi, Sports, Thrillers.
 Catalog URLs: `catalog/<movie|series>/<popular|top-rated|new|essentials>/genre=<Genre>.json`.
+
+### Decades and themes
+
+The same ranker serves two more collections:
+
+- **By Decade** — `decade-top-rated` and `decade-essentials`, options `2020s … 1960s`, `1950s-and-before`. Pure IMDb:
+  membership is IMDb's start year, with vote floors that step down for older decades (a 1970s series can't have 20k
+  voters). Popular rows stay live TMDB queries in the collection.
+- **Themes** — `theme-top-rated` and `theme-essentials`, options `Mindfuck`, `Plot-Twists`, `Heist`, `Time-Travel`,
+  `Superhero`, `Zombies`, `Apocalypse`, `Serial-Killer`, `Whodunnit`, `Time-Loop`, `Modern-Horror`,
+  `Horror-Classics`, `Outer-Space`, `True-Crime`. IMDb publishes no keywords, so candidates come from TMDB keyword
+  discovery (the most-voted and most popular matches of each verified keyword set) and are then ranked with the same
+  IMDb formulas; Modern Horror and Horror Classics are pure IMDb (Horror genre, by era). Documentaries are allowed
+  only in True Crime.
 
 ## Deploy your own copy
 
