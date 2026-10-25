@@ -112,7 +112,7 @@ GENRES = [
 ]
 ROWS = [("popular", "Popular"), ("top-rated", "Top Rated"), ("new", "New")]
 POPULAR_MIN_IMDB_VOTES = {"movie": 200, "series": 100}
-NEW_MIN_IMDB_VOTES = {"movie": 100, "series": 50}
+NEW_MIN_IMDB_VOTES = {"movie": 200, "series": 100}       # "new" also means noticed: a few hundred IMDb voters
 NEW_MAX_AGE_DAYS = 540
 
 
@@ -242,12 +242,11 @@ def prune_cache() -> None:
 
 
 # ----------------------------------------------------------------------------------------------- tmdb pools
-def discover(kind: str, pages: int, **params) -> list[dict]:
-    """Paged TMDB discover -> raw results (dedup by id), released titles only."""
-    t = "movie" if kind == "movie" else "tv"
+def paged(kind: str, path: str, pages: int, **params) -> list[dict]:
+    """Paged TMDB list (discover / trending) -> raw results in list order (dedup by id), released titles only."""
     out, seen = [], set()
     for page in range(1, pages + 1):
-        data = tmdb(f"discover/{t}", language="en-US", include_adult="false", page=page, **params)
+        data = tmdb(path, language="en-US", include_adult="false", page=page, **params)
         results = data.get("results") or []
         for r in results:
             date = (r.get("release_date") if kind == "movie" else r.get("first_air_date")) or ""
@@ -262,29 +261,52 @@ def discover(kind: str, pages: int, **params) -> list[dict]:
     return out
 
 
-def base_params(kind: str, mode: str) -> dict:
-    if mode == "popular":
-        return dict(sort_by="popularity.desc", **{"vote_count.gte": 50 if kind == "movie" else 20})
+def discover(kind: str, pages: int, **params) -> list[dict]:
+    return paged(kind, f"discover/{'movie' if kind == 'movie' else 'tv'}", pages, **params)
+
+
+def window_params(kind: str) -> dict:
+    """Released within the last NEW_MAX_AGE_DAYS and already rated by some people on TMDB."""
     since = (TODAY - dt.timedelta(days=NEW_MAX_AGE_DAYS)).isoformat()
     if kind == "movie":
-        return {"sort_by": "primary_release_date.desc", "primary_release_date.lte": TODAY.isoformat(),
-                "primary_release_date.gte": since, "vote_count.gte": 20}
-    return {"sort_by": "first_air_date.desc", "first_air_date.lte": TODAY.isoformat(), "first_air_date.gte": since,
+        return {"primary_release_date.lte": TODAY.isoformat(), "primary_release_date.gte": since, "vote_count.gte": 20}
+    return {"first_air_date.lte": TODAY.isoformat(), "first_air_date.gte": since,
             "include_null_first_air_dates": "false", "vote_count.gte": 10}
 
 
+def passes(kind: str, mode: str) -> list[tuple[int, dict]]:
+    """(pages, discover params) for one pool. Popular = what people look at now; New = recent and notable."""
+    if mode == "popular":
+        return [(10, dict(sort_by="popularity.desc", **{"vote_count.gte": 50 if kind == "movie" else 20}))]
+    w = window_params(kind)
+    date_key = "primary_release_date.desc" if kind == "movie" else "first_air_date.desc"
+    return [(6, dict(sort_by=date_key, **w)), (6, dict(sort_by="popularity.desc", **w))]
+
+
 def build_pools() -> dict[tuple[str, str], list[dict]]:
-    """(kind, mode) -> candidates with TMDB fields + imdb id. Global pools + per-genre passes, merged."""
+    """(kind, mode) -> candidates with TMDB fields + imdb id.
+    popular: TMDB trending-this-week (in rank order) + the popularity-sorted pool, globally and per genre.
+    new:     newest releases in the window + the most popular releases in the window, globally and per genre."""
     pools: dict[tuple[str, str], dict[int, dict]] = {}
     for kind in ("movie", "series"):
-        for mode, pages in (("popular", 50), ("new", 25)):
+        t = "movie" if kind == "movie" else "tv"
+        for mode in ("popular", "new"):
             print(f"tmdb: {mode} {kind} pool …")
             bucket = pools.setdefault((kind, mode), {})
-            for r in discover(kind, pages, **base_params(kind, mode)):
-                bucket.setdefault(r["id"], r)
+            jobs: list[tuple[int, dict]] = []
+            if mode == "popular":
+                for pos, r in enumerate(paged(kind, f"trending/{t}/week", 25)):
+                    r["_trend"] = pos
+                    bucket.setdefault(r["id"], r)
+                jobs.append((50, passes(kind, "popular")[0][1]))
+            else:
+                jobs += [(40, p) for _n, p in passes(kind, "new")]
             for g in GENRES:
                 for extra in g["m" if kind == "movie" else "t"]:
-                    for r in discover(kind, 5 if mode == "popular" else 3, **base_params(kind, mode), **extra):
+                    jobs += [(n, {**p, **extra}) for n, p in passes(kind, mode)]
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                for results in ex.map(lambda job: discover(kind, job[0], **job[1]), jobs):
+                    for r in results:
                         bucket.setdefault(r["id"], r)
     # resolve IMDb ids (threaded; cached across builds)
     todo = [(kind, r["id"]) for (kind, _m), b in pools.items() for r in b.values()]
@@ -391,8 +413,8 @@ def row_from_pool(kind: str, g: dict, imdb: dict[str, dict], pool: list[dict], m
         if not lang_ok(g, rec, tm.get("original_language") or ""):
             continue
         keep.append((tm, rec))
-    if mode == "popular":
-        keep.sort(key=lambda x: -(x[0].get("popularity") or 0))
+    if mode == "popular":     # trending-this-week first (in TMDB's order), then everything else by popularity
+        keep.sort(key=lambda x: (x[0].get("_trend", 10 ** 6), -(x[0].get("popularity") or 0)))
     else:
         keep.sort(key=lambda x: (x[0]["_date"], x[0].get("popularity") or 0), reverse=True)
     seen, out = set(), []
